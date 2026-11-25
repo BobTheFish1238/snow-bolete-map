@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Snow Depth vs Spring King Bolete</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<style>
+  :root {
+    --bg: #f3f5f6; --panel: #ffffff; --fg: #1c2429; --muted: #5d6b73; --line: #d5dce0;
+    --accent: #b4551d; --accent-fg: #ffffff; --bar: #9db0bb; --bar-hi: #b4551d; --win: rgba(180,85,29,.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11171b; --panel: #1a2227; --fg: #e4eaed; --muted: #93a2ab; --line: #2c373d;
+      --accent: #e0803f; --accent-fg: #1a1208; --bar: #4a5d68; --bar-hi: #e0803f; --win: rgba(224,128,63,.18); color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--fg); font: 14px/1.4 Inter, system-ui, sans-serif; display: flex; flex-direction: column; }
+  header { padding: 8px 16px; display: flex; flex-wrap: wrap; gap: 4px 16px; align-items: baseline; background: var(--panel); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 15px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  #main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+  #map { flex: 1; min-height: 200px; }
+  #controls { background: var(--panel); border-top: 1px solid var(--line); padding: 8px 16px 10px; display: grid; gap: 6px; max-height: 62vh; overflow: auto; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+  .row label { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+  select, input[type=number], input[type=date] { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 4px 6px; font: inherit; }
+  input[type=number] { width: 64px; }
+  button, .btn { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 5px 12px; font: inherit; cursor: pointer; text-decoration: none; display: inline-block; }
+  button.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); font-weight: 600; width: 76px; }
+  button:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* fixed-width readouts so the top row never changes height */
+  #date { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; width: 11.5em; white-space: nowrap; flex: none; }
+  #count { color: var(--muted); font-variant-numeric: tabular-nums; width: 17em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; font-size: 12px; }
+  #slider { width: 100%; accent-color: var(--accent); margin: 2px 0; }
+  #chartwrap { height: 48px; }
+  #chart { width: 100%; height: 100%; display: block; cursor: pointer; }
+  details.opts > summary { cursor: pointer; color: var(--fg); font-weight: 600; font-size: 13px; display: flex; gap: 12px; align-items: baseline; list-style-position: inside; }
+  #status { color: var(--muted); font-weight: 400; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  #status.err { color: #c0392b; }
+  .opts-body { display: grid; gap: 10px; padding-top: 8px; }
+  details.sub { color: var(--muted); font-size: 12px; }
+  details.sub summary { cursor: pointer; color: var(--fg); font-size: 12px; }
+  details.sub ol { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 3px; }
+  details.sub p { margin: 6px 0 0; }
+  code { background: var(--bg); padding: 0 4px; border-radius: 3px; }
+  .leaflet-container { background: #aab6bd; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Snow depth vs. spring king bolete</h1>
+  <span class="sub">NOAA NOHRSC modeled snow depth with iNaturalist <i>Boletus rex-veris</i> observations shown ±<span id="winLabel">4</span> days</span>
+</header>
+<div id="main">
+  <div id="map"></div>
+  <div id="controls">
+    <div class="row">
+      <button id="play" class="primary" type="button">Play</button>
+      <button id="prev" type="button" aria-label="Previous day">&larr;</button>
+      <button id="next" type="button" aria-label="Next day">&rarr;</button>
+      <span id="date">—</span>
+      <span id="count"></span>
+    </div>
+    <input id="slider" type="range" min="0" max="0" value="0" aria-label="Date">
+    <div id="chartwrap"><canvas id="chart"></canvas></div>
+
+    <details class="opts" id="opts">
+      <summary>Settings, data and help <span id="status"></span></summary>
+      <div class="opts-body">
+        <div class="row">
+          <label>Base map
+            <select id="basemap">
+              <option value="osm" selected>OpenStreetMap</option>
+              <option value="topo">Topographic</option>
+              <option value="sat">Satellite</option>
+              <option value="light">Light grey</option>
+            </select></label>
+          <label>Snow opacity <input id="snowOp" type="range" min="0" max="100" value="85"></label>
+          <label>Dot size <input id="dotSize" type="range" min="2" max="10" value="4"></label>
+          <label>Speed
+            <select id="speed"><option value="1200">Slow</option><option value="600" selected>Normal</option><option value="250">Fast</option><option value="100">Very fast</option></select></label>
+          <label>Window ± <input id="win" type="number" min="0" max="30" value="4"> days</label>
+          <label><input id="fade" type="checkbox" checked> Fade with distance</label>
+          <label><input id="showObscured" type="checkbox" checked> Show obscured locations (hollow)</label>
+        </div>
+        <div class="row">
+          <label>From <input id="d1" type="date" value="2026-03-01"></label>
+          <label>To <input id="d2" type="date" value="2026-07-31"></label>
+          <button id="load" type="button">Load from iNaturalist</button>
+          <label class="btn" for="file">Load export file (.zip / .csv)</label>
+          <input id="file" type="file" accept=".zip,.csv" hidden>
+        </div>
+        <details class="sub">
+          <summary>How to load many observations with an iNaturalist export</summary>
+          <p>The quick loader above reads up to about 8,000 observations. For more, or to pick exact columns, use an export:</p>
+          <ol>
+            <li>Sign in at inaturalist.org (exports need an account).</li>
+            <li>Open <a id="exportLink" href="https://www.inaturalist.org/observations/export" target="_blank" rel="noopener">the export page</a>. It should open with <i>Boletus rex-veris</i> and your dates filled in; if the filters are empty, set them yourself (species, date range, optional place).</li>
+            <li>In the columns step, tick at least: <code>id</code>, <code>observed_on</code>, <code>latitude</code>, <code>longitude</code>. Also useful: <code>place_guess</code>, <code>url</code>, <code>image_url</code>, <code>coordinates_obscured</code>.</li>
+            <li>Create the export and wait until it says it is ready (large ones can take several minutes), then download the <code>.zip</code>. You do not need to unzip it.</li>
+            <li>Click <b>Load export file</b> above and choose the zip (or the CSV inside). The date range switches to the dates in the file.</li>
+          </ol>
+          <p>Locations iNaturalist hides (obscured or private) are only precise to roughly 20 km, so they draw as hollow dots and can be switched off above.</p>
+        </details>
+        <details class="sub">
+          <summary>About the snow layer</summary>
+          <p>Modeled snow depth from NOAA NOHRSC (05 UTC daily, ~1 km grid, lower 48), taken from NOHRSC's georeferenced Google Earth tiles. Tiles load for the part of the map in view. Pixels with no snow are transparent.</p>
+        </details>
+      </div>
+    </details>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  var DAY = 86400000;
+  var TAXON = 'Boletus rex-veris';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var dayNum = function (s) { var p = s.slice(0, 10).split('-'); return Date.UTC(+p[0], +p[1] - 1, +p[2]) / DAY; };
+  var dayStr = function (n) { var d = new Date(n * DAY); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); };
+  var dayLabel = function (n) { return new Date(n * DAY).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }); };
+  function escapeHtml(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function setStatus(t, err) { var s = $('status'); s.textContent = t; s.className = err ? 'err' : ''; }
+
+  // ---- map ----
+  var map = L.map('map').setView([46.0, -121.5], 7);
+  var bases = {
+    osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap contributors' }),
+    topo: L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', { maxZoom: 17, attribution: 'Map: OpenTopoMap, OSM' }),
+    sat: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 18, attribution: 'Imagery: Esri' }),
+    light: L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', { maxZoom: 19, attribution: '&copy; OSM, CARTO' })
+  };
+  var curBase = bases.osm.addTo(map);
+  $('basemap').addEventListener('change', function () {
+    map.removeLayer(curBase); curBase = bases[this.value].addTo(map); curBase.bringToBack();
+  });
+  map.createPane('snow'); map.getPane('snow').style.zIndex = 250;
+  map.createPane('obs'); map.getPane('obs').style.zIndex = 650;
+  new ResizeObserver(function () { map.invalidateSize(); }).observe($('map'));
+
+  // ---- time state ----
+  var start = dayNum($('d1').value), end = dayNum($('d2').value), cur = start;
+  var obs = [], counts = {};
+  var obsLayer = L.layerGroup().addTo(map);
+
+  // ---- snow overlay (NOHRSC georeferenced tiles) ----
+  // Grid from NOHRSC's own KML: tile R<row>C<col> is 4.2666667 deg square,
+  // row 1's north edge is 53.9666667 N, column 1's west edge is 126.25 W.
+  var T0_N = 53.96666666666647, T0_W = -126.24999999999966, TSIZE = 4.266666666666667, NROWS = 7, NCOLS = 15;
+  var snowOpacity = 0.85, tiles = {}, tileFails = 0;
+
+  function pad3(n) { return (n < 10 ? '00' : n < 100 ? '0' : '') + n; }
+  function tileUrl(n, r, c) {
+    var ymd = dayStr(n).replace(/-/g, '');
+    return 'https://www.nohrsc.noaa.gov/snow_model/GE/' + ymd + '/nsm_depth/nsm_depth_' + ymd + '05_R' + pad3(r) + 'C' + pad3(c) + '_us.png';
+  }
+  function tileBounds(r, c) {
+    var n = T0_N - (r - 1) * TSIZE, w = T0_W + (c - 1) * TSIZE;
+    return [[n - TSIZE, w], [n, w + TSIZE]];
+  }
+  function syncTiles() {
+    var b = map.getBounds().pad(0.15), want = {}, r, c;
+    var r1 = Math.max(1, Math.floor((T0_N - b.getNorth()) / TSIZE) + 1), r2 = Math.min(NROWS, Math.floor((T0_N - b.getSouth()) / TSIZE) + 1);
+    var c1 = Math.max(1, Math.floor((b.getWest() - T0_W) / TSIZE) + 1), c2 = Math.min(NCOLS, Math.floor((b.getEast() - T0_W) / TSIZE) + 1);
+    for (r = r1; r <= r2; r++) for (c = c1; c <= c2; c++) want[r + '_' + c] = [r, c];
+    Object.keys(want).forEach(function (k) {
+      if (tiles[k]) return;
+      var rc = want[k];
+      var ov = L.imageOverlay(tileUrl(cur, rc[0], rc[1]), tileBounds(rc[0], rc[1]), { pane: 'snow', opacity: snowOpacity, interactive: false });
+      ov.addTo(map);                      // the <img> only exists after the overlay is added
+      var el = ov.getElement();
+      if (el) {
+        el.addEventListener('error', function () { el.style.visibility = 'hidden'; tileFails++; snowStatus(); });
+        el.addEventListener('load', function () { el.style.visibility = 'visible'; });
+      }
+      tiles[k] = { overlay: ov, r: rc[0], c: rc[1] };
+    });
+    Object.keys(tiles).forEach(function (k) { if (!want[k]) { map.removeLayer(tiles[k].overlay); delete tiles[k]; } });
+  }
+  function setSnowDay(n) {
+    tileFails = 0;
+    Object.keys(tiles).forEach(function (k) { var t = tiles[k]; t.overlay.setUrl(tileUrl(n, t.r, t.c)); });
+  }
+  function snowStatus() {
+    var n = Object.keys(tiles).length;
+    if (n && tileFails >= n) setStatus('No snow tiles for ' + dayStr(cur) + ' here (outside the lower 48, date missing, or blocked).', true);
+  }
+  var preloaded = {};
+  function preload(n) {
+    if (n > end) return;
+    Object.keys(tiles).forEach(function (k) {
+      var t = tiles[k], u = tileUrl(n, t.r, t.c);
+      if (preloaded[u]) return; preloaded[u] = 1; (new Image()).src = u;
+    });
+  }
+  map.on('moveend', syncTiles);
+  $('snowOp').addEventListener('input', function () {
+    snowOpacity = this.value / 100;
+    Object.keys(tiles).forEach(function (k) { tiles[k].overlay.setOpacity(snowOpacity); });
+  });
+
+  // ---- observations ----
+  function makeMarker(o) {
+    o.marker = L.circleMarker([o.lat, o.lon], { pane: 'obs', radius: 4, color: '#fff', weight: 1, fillColor: '#d9480f', fillOpacity: 0.9 });
+    o.marker.bindPopup('<b>' + dayStr(o.day) + '</b><br>' + escapeHtml(o.place || '') +
+      (o.obscured ? '<br><i>Location obscured by iNaturalist (approx. ±20 km)</i>' : '') +
+      (o.photo ? '<br><img src="' + escapeHtml(o.photo) + '" width="75" height="75" alt="">' : '') +
+      (o.uri ? '<br><a href="' + escapeHtml(o.uri) + '" target="_blank" rel="noopener">iNaturalist #' + o.id + '</a>' : ''));
+  }
+  function ingest(rows) {
+    obsLayer.clearLayers();
+    obs = rows; counts = {};
+    obs.forEach(function (o) { counts[o.day] = (counts[o.day] || 0) + 1; makeMarker(o); });
+    start = dayNum($('d1').value); end = dayNum($('d2').value);
+    cur = Math.min(Math.max(cur, start), end);
+    $('slider').max = end - start;
+    update();
+  }
+
+  async function loadObs() {
+    var d1 = $('d1').value, d2 = $('d2').value;
+    if (!d1 || !d2 || dayNum(d2) < dayNum(d1)) { setStatus('Pick a valid date range.', true); return; }
+    var w = Math.max(0, +$('win').value || 0), rows = [], lastId = 0, pages = 0;
+    setStatus('Loading observations from iNaturalist…');
+    try {
+      while (pages < 40) {
+        var url = 'https://api.inaturalist.org/v1/observations?taxon_name=' + encodeURIComponent(TAXON) +
+          '&d1=' + dayStr(dayNum(d1) - w) + '&d2=' + dayStr(dayNum(d2) + w) +
+          '&geo=true&per_page=200&order_by=id&order=asc&id_above=' + lastId;
+        var r = await fetch(url);
+        if (!r.ok) throw new Error('iNaturalist returned ' + r.status);
+        var res = (await r.json()).results || [];
+        res.forEach(function (o) {
+          lastId = Math.max(lastId, o.id);
+          if (!o.observed_on || !o.geojson) return;
+          var c = o.geojson.coordinates;
+          rows.push({ id: o.id, day: dayNum(o.observed_on), lat: c[1], lon: c[0], uri: o.uri,
+            photo: o.photos && o.photos[0] ? o.photos[0].url : '', place: o.place_guess || '', obscured: !!o.obscured });
+        });
+        pages++;
+        setStatus('Loaded ' + rows.length + '…');
+        if (res.length < 200) break;
+      }
+    } catch (e) { setStatus('Could not load observations: ' + e.message, true); return; }
+    ingest(rows);
+    setStatus(rows.length + ' observations loaded' + (pages >= 40 ? ' (limit reached; use an export for more)' : '') + '.');
+  }
+
+  // ---- iNaturalist export (zip or csv) ----
+  function parseCSV(text) {
+    var rows = [], row = [], f = '', q = false, i = 0, ch;
+    if (text.charCodeAt(0) === 0xFEFF) i = 1;
+    for (; i < text.length; i++) {
+      ch = text[i];
+      if (q) {
+        if (ch === '"') { if (text[i + 1] === '"') { f += '"'; i++; } else q = false; } else f += ch;
+      } else if (ch === '"') q = true;
+      else if (ch === ',') { row.push(f); f = ''; }
+      else if (ch === '\n' || ch === '\r') { if (ch === '\r' && text[i + 1] === '\n') i++; row.push(f); f = ''; if (row.length > 1 || row[0] !== '') rows.push(row); row = []; }
+      else f += ch;
+    }
+    if (f !== '' || row.length) { row.push(f); rows.push(row); }
+    return rows;
+  }
+  async function loadFile(file) {
+    setStatus('Reading ' + file.name + '…');
+    try {
+      var text;
+      if (/\.zip$/i.test(file.name)) {
+        var z = await JSZip.loadAsync(file);
+        var entry = Object.keys(z.files).filter(function (n) { return /\.csv$/i.test(n) && !z.files[n].dir; })[0];
+        if (!entry) throw new Error('no .csv found inside the zip');
+        text = await z.files[entry].async('string');
+      } else text = await file.text();
+      var table = parseCSV(text), head = table.shift().map(function (h) { return h.trim().toLowerCase(); });
+      var ix = function (n) { return head.indexOf(n); };
+      var iId = ix('id'), iDate = ix('observed_on'), iLat = ix('latitude'), iLon = ix('longitude');
+      if (iId < 0 || iDate < 0 || iLat < 0 || iLon < 0) throw new Error('the file needs id, observed_on, latitude and longitude columns');
+      var iUrl = ix('url'), iImg = ix('image_url'), iPlace = ix('place_guess'), iObs = ix('coordinates_obscured');
+      var rows = [], skipped = 0, lo = Infinity, hi = -Infinity;
+      table.forEach(function (r) {
+        var lat = parseFloat(r[iLat]), lon = parseFloat(r[iLon]), d = (r[iDate] || '').slice(0, 10);
+        if (!isFinite(lat) || !isFinite(lon) || !/^\d{4}-\d{2}-\d{2}$/.test(d)) { skipped++; return; }
+        var day = dayNum(d); lo = Math.min(lo, day); hi = Math.max(hi, day);
+        rows.push({ id: r[iId], day: day, lat: lat, lon: lon, uri: iUrl >= 0 ? r[iUrl] : '', photo: iImg >= 0 ? r[iImg] : '',
+          place: iPlace >= 0 ? r[iPlace] : '', obscured: iObs >= 0 && /^true$/i.test(r[iObs]) });
+      });
+      if (!rows.length) throw new Error('no rows with a date and coordinates');
+      $('d1').value = dayStr(lo); $('d2').value = dayStr(hi); cur = lo; preloaded = {};
+      ingest(rows);
+      setStatus(rows.length + ' observations from export' + (skipped ? ' (' + skipped + ' skipped: no date or location)' : '') + '.');
+    } catch (e) { setStatus('Could not read file: ' + e.message, true); }
+  }
+  $('file').addEventListener('change', function () { if (this.files[0]) loadFile(this.files[0]); this.value = ''; });
+  function updateExportLink() {
+    $('exportLink').href = 'https://www.inaturalist.org/observations/export?taxon_name=' + encodeURIComponent(TAXON).replace(/%20/g, '+') +
+      '&d1=' + $('d1').value + '&d2=' + $('d2').value;
+  }
+  $('d1').addEventListener('change', updateExportLink); $('d2').addEventListener('change', updateExportLink); updateExportLink();
+
+  // ---- time stepping ----
+  function update() {
+    var w = Math.max(0, +$('win').value || 0), base = +$('dotSize').value, fade = $('fade').checked, showObs = $('showObscured').checked, shown = 0;
+    $('winLabel').textContent = w;
+    $('date').textContent = dayLabel(cur);
+    $('slider').value = cur - start;
+    setSnowDay(cur); preload(cur + 1); preload(cur + 2);
+    obs.forEach(function (o) {
+      var dist = Math.abs(o.day - cur), vis = dist <= w && (showObs || !o.obscured);
+      if (vis) {
+        var a = fade ? 1 - 0.65 * (w ? dist / w : 0) : 1;
+        o.marker.setStyle(o.obscured
+          ? { color: '#d9480f', weight: 1.5, opacity: a, fillColor: '#d9480f', fillOpacity: 0.12 * a }
+          : { color: '#fff', weight: 1, opacity: a, fillColor: '#d9480f', fillOpacity: 0.95 * a });
+        o.marker.setRadius(dist === 0 ? base + 1.5 : base);
+        if (!obsLayer.hasLayer(o.marker)) obsLayer.addLayer(o.marker);
+        shown++;
+      } else if (obsLayer.hasLayer(o.marker)) obsLayer.removeLayer(o.marker);
+    });
+    $('count').textContent = shown + ' shown · ' + (counts[cur] || 0) + ' on this day';
+    drawChart();
+  }
+  var timer = null;
+  function setPlaying(on) {
+    if (timer) { clearInterval(timer); timer = null; }
+    $('play').textContent = on ? 'Pause' : 'Play';
+    if (on) {
+      if (cur >= end) cur = start;
+      timer = setInterval(function () { if (cur >= end) { setPlaying(false); return; } cur++; update(); }, +$('speed').value);
+    }
+  }
+  $('play').addEventListener('click', function () { setPlaying(!timer); });
+  $('speed').addEventListener('change', function () { if (timer) setPlaying(true); });
+  $('slider').addEventListener('input', function () { cur = start + (+this.value); update(); });
+  $('prev').addEventListener('click', function () { cur = Math.max(start, cur - 1); update(); });
+  $('next').addEventListener('click', function () { cur = Math.min(end, cur + 1); update(); });
+  ['win', 'fade', 'dotSize', 'showObscured'].forEach(function (id) { $(id).addEventListener('input', update); });
+  $('load').addEventListener('click', function () { setPlaying(false); preloaded = {}; loadObs(); });
+  document.addEventListener('keydown', function (e) {
+    var t = e.target.tagName;
+    if (t === 'SELECT' || t === 'TEXTAREA' || (t === 'INPUT' && e.target.type !== 'range' && e.target.type !== 'checkbox')) return;
+    if (e.key === ' ' && t !== 'BUTTON' && t !== 'SUMMARY') { e.preventDefault(); setPlaying(!timer); }
+    if (e.key === 'ArrowLeft' && t !== 'INPUT') $('prev').click();
+    if (e.key === 'ArrowRight' && t !== 'INPUT') $('next').click();
+  });
+
+  // ---- chart ----
+  var cv = $('chart');
+  function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+  function drawChart() {
+    var dpr = window.devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+    if (!W || !H) return;
+    cv.width = W * dpr; cv.height = H * dpr;
+    var g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+    var n = end - start + 1, bw = W / n, max = 1, d, w = Math.max(0, +$('win').value || 0);
+    for (d = start; d <= end; d++) max = Math.max(max, counts[d] || 0);
+    g.fillStyle = css('--win'); g.fillRect((cur - w - start) * bw, 0, (2 * w + 1) * bw, H);
+    for (d = start; d <= end; d++) {
+      var c = counts[d] || 0; if (!c) continue;
+      var h = Math.max(2, (c / max) * (H - 14));
+      g.fillStyle = Math.abs(d - cur) <= w ? css('--bar-hi') : css('--bar');
+      g.fillRect((d - start) * bw, H - 12 - h, Math.max(1, bw - 0.5), h);
+    }
+    g.fillStyle = css('--fg'); g.fillRect((cur - start + 0.5) * bw - 0.5, 0, 1, H - 12);
+    g.fillStyle = css('--muted'); g.font = '10px system-ui, sans-serif'; g.textBaseline = 'bottom';
+    g.textAlign = 'left'; g.fillText(dayStr(start) + '  ·  observations per day (peak ' + max + ')', 2, H);
+    g.textAlign = 'right'; g.fillText(dayStr(end), W - 2, H);
+  }
+  cv.addEventListener('click', function (e) {
+    var r = cv.getBoundingClientRect();
+    cur = start + Math.min(end - start, Math.max(0, Math.floor((e.clientX - r.left) / r.width * (end - start + 1)))); update();
+  });
+  window.addEventListener('resize', drawChart);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawChart);
+
+  $('slider').max = end - start;
+  syncTiles();
+  update();
+  loadObs();
+})();
+</script>
+</body>
+</html>
